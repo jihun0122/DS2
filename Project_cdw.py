@@ -29,18 +29,17 @@ def print_all_university():
     dbcon.printResult(query_result)
 
 def print_all_student():
-    #q = "select * from student order by student_id, name, sat_score, gpa"
-    q="select * from student"
+    q="select * from student order by id"
     query_result = dbcon.getQueryResult(q)
     dbcon.printResult(query_result)
 
 def add_university():
     try:
         univ = input("University name: ")
-        capa = input("University capacity: ")
+        capa = int(input("University capacity: "))
         group = input("University group: ")
-        cutline = input("Cutline score: ")
-        weight = input("Weight of high school records: ")
+        cutline = int(input("Cutline score: "))
+        weight = int(input("Weight of high school records: "))
         univ = univ.replace("'","\\'")  # 따옴표 학교명 대응
         print(univ)
 
@@ -71,10 +70,10 @@ def del_university():
 def add_student():
     try:
         name = input("Student name: ")
-        score = input("CSAT score: ")
-        gpa = input("High school record score: ")
+        score = int(input("CSAT score: "))
+        gpa = int(input("High school record score: "))
 
-        q = F"Insert into student(name, sat_score, gpa) values('{name}', '{score}', '{gpa}')"
+        q = F"Insert into student (name,csat_score, school_score) values ('{name}', '{score}', '{gpa}')"
         dbcon.executeQuery(q)
         print("A Student is successfully inserted")
 
@@ -84,15 +83,31 @@ def add_student():
 def del_student():
     try:
         del_student = input("Delete Student ID: ")
-        q = F"select * from student where univ_id = {del_student}"
+        q = F"select * from student where id = {del_student}"
         query_result = dbcon.getQueryResult(q)
         if len(query_result) == 0:
-            print(F"University Not exist where ID = {del_univ}")
+            print(F"Student Not exist where ID = {del_student}")
             return
-
-        del_q = F"delete from university where univ_id = {del_univ}"
+        # 학생정보 삭제
+        del_q = F"delete from student where id = {del_student}"
         dbcon.executeQuery(del_q)
-        print(F"University was deleted where univ_id = {del_univ}")
+        # apply 학생정보 삭제
+        del_apply_q = f"delete from apply where student_id = {del_student}"
+        dbcon.executeQuery(del_apply_q)
+        # 학교 apply 변경
+        del_univ_q = f"update university u " \
+                     f"set applied = applied - (" \
+                     f"select count(university_id) from apply where student_id = {del_student} " \
+                     f"and university_id = id " \
+                     f"group by student_id )"
+        dbcon.executeQuery(del_univ_q)
+        print(F"Student was deleted where id = {int(del_student)}")
+
+        # 나중에 삭제
+        q_print_apply = "select * from apply"
+        query_result = dbcon.getQueryResult(q_print_apply)
+        dbcon.printResult(query_result)
+
 
     except:
         print("Error Occured.. Please Insert Number")
@@ -103,32 +118,72 @@ def make_application():
         q= f"Select 1 From information_schema.TABLES Where TABLE_NAME = 'apply'"
         check = dbcon.getQueryResult(q)
         if len(check) == 0:
-            q_create = "CREATE table apply " \
-                       "(student_id int(11), university_id int(11), primary key(student_id,university_id))"
+            q_create = "CREATE table apply (student_id int(11), university_id int(11), " \
+                       "primary key (student_id,university_id))"
             dbcon.executeQuery(q_create)
             print("apply table create")
 
-        student_id = input("Student ID: ")
-        university_id = input("University ID: ")
+        student_id = int(input("Student ID: "))
+
+        # 학생 유무 체크 예외처리
+        student_check_q = f"select * from student where id = {student_id} "
+        student_check = dbcon.getQueryResult(student_check_q)
+        if len(student_check) == 0:
+            raise Exception('Check this student ID.')
+
+        university_id = int(input("University ID: "))
+
+        #대학교 유무 예외처리
+        univ_check_q= f"select * from university where id = {university_id}"
+        univ_check = dbcon.getQueryResult(univ_check_q)
+        if len(univ_check) == 0:
+            raise Exception('Check this university ID.')
+
+        # 중복지원 예외처리
+        red_check_q = f"select * from apply where student_id = {student_id} and university_id = {university_id} "
+        red_check = dbcon.getQueryResult(red_check_q)
+        if len(red_check) != 0 :
+            raise Exception("the student\'s already applied to this University.")
+
+        # 같은군 유무 예외처리
+        clu_check_q = f"select univ_group from university inner join " \
+                      f"(select univ_group from apply inner join university on(university.id = apply.university_id) " \
+                      f"where student_id = {student_id}) as a using (univ_group) where university.id = {university_id}"
+        clu_check = dbcon.getQueryResult(clu_check_q)
+        if len(clu_check)!= 0 :
+            raise Exception("the university group\'s already been applied.")
+
+        # apply에 추가
         q = f"insert into apply (student_id, university_id) values ({student_id},{university_id})"
-        q_university = f"update university into applied ={university_id}"
         dbcon.executeQuery(q)
+
+        # 대학테이블에 applied 변경
+        q_university = f"update university set applied = applied + 1 where id ={university_id} "
+        dbcon.executeQuery(q_university)
         print("Successfully made an application")
 
-    except:
-        print('Please Insert number')
+        #나중에 삭제
+        q_print_apply = "select * from apply"
+        query_result = dbcon.getQueryResult(q_print_apply)
+        dbcon.printResult(query_result)
+
+    except Exception as e:
+        print('Sorry,',e)
 
 
 def print_all_applied_student():
-    pass
+    q= f"select distinct id,name,csat_score,school_score " \
+       f"from student inner join apply on(student.id = apply.student_id) "
+    query_result = dbcon.getQueryResult(q)
+    dbcon.printResult(query_result)
 
 
 def print_all_university_applied():
-    pass
-
-
-
-
+    q = f"select student.name student_name, university.name univ_name, univ_group " \
+        f"from student inner join apply on(student.id = apply.student_id) " \
+        f"inner join university on(apply.university_id = university.id)"
+    query_result = dbcon.getQueryResult(q)
+    dbcon.printResult(query_result)
 
 
 apply_to_university()
@@ -161,4 +216,3 @@ while(True):
     elif action == "12":
         print("Bye!")
         break
-
