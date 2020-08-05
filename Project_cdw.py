@@ -1,5 +1,6 @@
 #DB part 분리 (DBconnect쪽으로)
 from DBconnect import DBConnect
+import math
 dbcon = DBConnect("astronaut.snu.ac.kr", '20DS2_2020_0704', '20DS2_2020_0704', '20DS2_2020_0704_PRJ')
 
 def apply_to_university():
@@ -24,12 +25,12 @@ def apply_to_university():
 
 
 def print_all_university():
-    q = "select * from university order by id"
+    q = "select * from university order by id,name,capacity,univ_group,cutline,weight,applied"
     query_result = dbcon.getQueryResult(q)
     dbcon.printResult(query_result)
 
 def print_all_student():
-    q="select * from student order by id"
+    q="select * from student order by id,name,csat_score,school_score"
     query_result = dbcon.getQueryResult(q)
     dbcon.printResult(query_result)
 
@@ -41,7 +42,6 @@ def add_university():
         cutline = int(input("Cutline score: "))
         weight = int(input("Weight of high school records: "))
         univ = univ.replace("'","\\'")  # 따옴표 학교명 대응
-        print(univ)
 
         q = f"Insert into university(name,capacity,univ_group,cutline,weight) values('{univ}', '{capa}', '{group}', '{cutline}','{weight}')"
         dbcon.executeQuery(q)
@@ -56,12 +56,14 @@ def del_university():
         q = F"select * from university where id = {del_univ}"
         query_result = dbcon.getQueryResult(q)
         if len(query_result) == 0:
-            print(F"University ID({del_univ}) Not exist.")
+            print(F"University ID ({del_univ}) Not exist.")
             return
 
+        # 학교 정보 삭제. apply 자동삭제(f.k)
         del_q = F"delete from university where id = {del_univ}"
         dbcon.executeQuery(del_q)
-        print(F"University was successfully deleted. id: {del_univ}")
+        print(F"University ({del_univ}) was successfully deleted.\n "
+              F"Done! You can see all University, selecting action number: 1")
 
     except:
         print("Please Insert Number")
@@ -75,10 +77,10 @@ def add_student():
 
         q = F"Insert into student (name,csat_score, school_score) values ('{name}', '{score}', '{gpa}')"
         dbcon.executeQuery(q)
-        print("A Student is successfully inserted")
+        print("The Student is successfully inserted.")
 
     except:
-        print("Student Insert Fail")
+        print("Student Insert Fail.")
 
 def del_student():
     try:
@@ -86,31 +88,25 @@ def del_student():
         q = F"select * from student where id = {del_student}"
         query_result = dbcon.getQueryResult(q)
         if len(query_result) == 0:
-            print(F"Student Not exist where ID = {del_student}")
+            print(F"Student ID ({del_student}) Not exist.")
             return
-        # 학생정보 삭제
+        # 학교 applied 변경
+        q = F"select distinct university_id from apply where student_id = {del_student}"
+        query_result = dbcon.getQueryResult(q)
+
+        for i in range(len(query_result)):
+            univ_id = query_result[i]['university_id']
+            u_q = F"update university set applied = applied - 1 where id = {univ_id}"
+            dbcon.executeQuery(u_q)
+
+         # 학생 정보 삭제, appy 정보 자동 삭제 (f.k)
         del_q = F"delete from student where id = {del_student}"
         dbcon.executeQuery(del_q)
-        # apply 학생정보 삭제
-        del_apply_q = f"delete from apply where student_id = {del_student}"
-        dbcon.executeQuery(del_apply_q)
-        # 학교 apply 변경
-        del_univ_q = f"update university u " \
-                     f"set applied = applied - (" \
-                     f"select count(university_id) from apply where student_id = {del_student} " \
-                     f"and university_id = id " \
-                     f"group by student_id )"
-        dbcon.executeQuery(del_univ_q)
-        print(F"Student was deleted where id = {int(del_student)}")
-
-        # 나중에 삭제
-        q_print_apply = "select * from apply"
-        query_result = dbcon.getQueryResult(q_print_apply)
-        dbcon.printResult(query_result)
-
+        print(F"Student ({del_student}) was successfully deleted.\n "
+              F"Done! You can see all Student, selecting action number: 2")
 
     except:
-        print("Error Occured.. Please Insert Number")
+        print("Sorry. Error Occurred. Please Insert Number")
 
 def make_application():
     try:
@@ -162,11 +158,6 @@ def make_application():
         dbcon.executeQuery(q_university)
         print("Successfully made an application")
 
-        #나중에 삭제
-        q_print_apply = "select * from apply"
-        query_result = dbcon.getQueryResult(q_print_apply)
-        dbcon.printResult(query_result)
-
     except Exception as e:
         print('Sorry,',e)
 
@@ -185,6 +176,100 @@ def print_all_university_applied():
     query_result = dbcon.getQueryResult(q)
     dbcon.printResult(query_result)
 
+def predict_studentList(university_id, u_capa, u_ratio, u_cutline):
+    # rank query
+    rq = F"select student_id, name, csat_score, school_score, csat_score + school_score*{u_ratio} as tot_score, " \
+         F"rank() over(order by tot_score desc, school_score desc) as rank " \
+         F"from apply a inner join student s on(a.student_id = s.id)" \
+         F"where a.university_id = {university_id} and csat_score + school_score*{u_ratio} >={u_cutline} " \
+         F"order by rank, school_score, student_id, name, csat_score"
+    r_result = dbcon.getQueryResult(rq)
+    f_result = r_result  # 아무 조건도 안 타는 경우
+
+    # 정원초과,동점자 처리
+    if len(r_result) > u_capa:
+        d_capa = math.ceil(u_capa * 1.1)
+        if len(r_result) >= d_capa + 1 and r_result[u_capa - 1]['rank'] == r_result[d_capa]['rank']:
+            duple_rank = r_result[u_capa - 1]['rank']
+            f_result = list(filter(lambda x: x['rank'] < duple_rank, r_result))
+        elif r_result[u_capa - 1]['rank'] == r_result[u_capa]['rank']:
+            duple_rank = r_result[u_capa - 1]['rank']
+            f_result = list(filter(lambda x: x['rank'] <= duple_rank, r_result))
+        else:
+            f_result = r_result[:u_capa]
+
+    return f_result
+
+
+def print_expected_successful_applicants():
+    try:
+        university_id = int(input("University ID: "))
+        q = F"select * from university where id = {university_id}"
+        u_result = dbcon.getQueryResult(q)
+        dbcon.printResult(u_result)
+
+        if len(u_result) == 0:
+            print(F"University ID ({university_id}) Not exist.")
+            return
+
+        u_capa = u_result[0]['capacity']
+        u_ratio = u_result[0]['weight']
+        u_cutline = u_result[0]['cutline']
+
+        f_result = predict_studentList(university_id, u_capa, u_ratio, u_cutline)
+
+        # remove unnecessary column
+        for i in range(len(f_result)):
+            del f_result[i]['rank']
+            del f_result[i]['tot_score']
+
+        # reordering
+        f_result = sorted(f_result, key=lambda k: (k['student_id'], k['name'],k['csat_score'],k['school_score']))
+
+        dbcon.printResult(f_result)
+
+    except :
+        print("Sorry. Please university ID check.")
+
+
+def print_expected_universities():
+    try:
+        student_id = int(input("Student ID: "))
+        q = f"select university_id as id,university.name, capacity, univ_group, cutline, weight,applied " \
+            f"from apply inner join university on(university.id = apply.university_id) " \
+            f"inner join student on (student.id = apply.student_id)  " \
+            f"where csat_score + school_score * weight >= cutline and student.id = {student_id} " \
+            f"order by university_id, university.name, capacity, univ_group, cutline,weight,applied "
+        query_result = dbcon.getQueryResult(q)
+        if len(query_result)==0:
+            raise  Exception(f"Student ID ({student_id}) Not exist of the student has\'t applied.")
+        dbcon.printResult(query_result)
+
+    except Exception as e:
+        print("Sorry,", e)
+
+def reset_database():
+    # table 삭제
+    try:
+        confirm = input("Are you sure?? (Y/N)")
+        if confirm.upper() == 'Y':
+            delete_school_q = "truncate from student"
+            dbcon.executeQuery(delete_school_q)
+            delete_university_q = "truncate from university"
+            dbcon.executeQuery(delete_university_q)
+            foreign_q = "set foreign_key_checks = 0"
+            dbcon.executeQuery(foreign_q)
+            delete_apply_q = "truncate from apply"
+            dbcon.executeQuery(delete_apply_q)
+            foreign_q = "set foreign_key_checks = 1"
+            dbcon.executeQuery(foreign_q)
+            print("Done!")
+
+        else:
+            print("Not Execute...")
+
+    except:
+        print("Sorry. Error occurred and canceled.")
 
 apply_to_university()
 
@@ -209,10 +294,12 @@ while(True):
         print_all_applied_student()
     elif action == "9":
         print_all_university_applied()
-
-
-
-
+    elif action == "10":
+        print_expected_successful_applicants()
+    elif action == "11":
+        print_expected_universities()
     elif action == "12":
         print("Bye!")
         break
+    elif action == "13":
+        reset_database()
